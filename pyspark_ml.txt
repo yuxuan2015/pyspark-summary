@@ -1,0 +1,258 @@
+pyspark常用机器学习命令总结
+
+1.读取数据
+	1.1 textFile生成RDD
+	data = sc.textFile(path+'\\'+'classify_data.txt')
+	
+	1.2 spark.read.format()生成DataFrame
+	spark.read.format("libsvm").load("data/mllib/sample_libsvm_data.txt")
+
+2.数据预处理
+	2.1 数据类型转化
+		2.1.1 kmeans需要的数据格式
+		#转成kmeans需要的数据格式
+		def parseRow(line):
+			row = line.split('\t')
+			return Row(features=Vectors.dense([float(x) for x in row]))
+		dataset = data.map(parseRow).toDF()
+		#parsedData = data.map(lambda line: Vectors.dense([float(x) for x in line.split('\t')])).map(lambda v: Row(features=v))
+		#dataset = spark.createDataFrame(parsedData)
+		
+		2.1.2 分类和回归模型需要的数据格式
+		# Load and parse the data
+		def parseRow(line):
+			row = line.split('\t')
+			return Row(labelpoint=row[-1],
+					   features=Vectors.dense([float(x) for x in row[:-1]]))
+		parsedData = data.map(parseRow).toDF()
+		
+		2.1.3
+		toPandas()把spark的DataFrame转化成pandas的DataFrame
+		spark.createDataFrame(df)把pandas的DataFrame转化成spark的DataFrame
+	
+	2.2 标准化
+		2.2.1 MinMaxScaler
+		pyspark.ml.feature.MinMaxScaler(self, min=0.0, max=1.0, inputCol=None, outputCol=None)[source]
+		注：Rescale each feature individually to a common range [min, max] linearly using column summary statistics, which is also known as min-max normalization or Rescaling. The rescaled value for feature E is calculated as,
+		Rescaled(e_i) = (e_i - E_min) / (E_max - E_min) * (max - min) + min
+		For the case E_max == E_min, Rescaled(e_i) = 0.5 * (max + min)
+		
+		from pyspark.ml.feature import MinMaxScaler
+		mmScaler = MinMaxScaler(inputCol="feature", outputCol="features")
+		data_1 = mmScaler.fit(datas).transform(datas)
+		
+		2.2.2 StandardScaler
+		pyspark.ml.feature.StandardScaler(self, withMean=False, withStd=True, inputCol=None, outputCol=None)
+		注：Standardizes features by removing the mean and scaling to unit variance using column summary statistics on the samples in the training set.
+		The “unit std” is computed using the corrected sample standard deviation, which is computed as the square root of the unbiased sample variance.
+		
+		from pyspark.ml.feature import StandardScaler
+		stdScaler = StandardScaler(inputCol="feature", outputCol="features")
+		data_1 = stdScaler.fit(datas).transform(datas)
+		
+		2.2.3 MaxAbsScaler
+		pyspark.ml.feature.MaxAbsScaler(self, inputCol=None, outputCol=None)
+		注：Rescale each feature individually to range [-1, 1] by dividing through the largest maximum absolute value in each feature. It does not shift/center the data, and thus does not destroy any sparsity.
+		
+		from pyspark.ml.feature import MaxAbsScaler
+		maScaler = MaxAbsScaler(inputCol="feature", outputCol="features")
+		data_1 = maScaler.fit(datas).transform(datas)
+		
+		
+	2.3 类别转编码
+		2.3.1 StringIndexer
+		pyspark.ml.feature.StringIndexer(self, inputCol=None, outputCol=None, handleInvalid="error")
+		StringIndexer将一列labels转译成[0,labels基数)的index
+		
+		from pyspark.ml.feature import StringIndexer
+		
+		labeled = StringIndexer(inputCol="labelpoint", outputCol="label")
+		datas = labeled.fit(parsedData).transform(parsedData)
+		
+		2.3.2 OneHotEncoder
+		pyspark.ml.feature.OneHotEncoder(self, dropLast=True, inputCol=None, outputCol=None)
+		先用StringIndexer把字符串转化成数字后，再用OneHotEncoder
+		
+		from pyspark.ml.feature import OneHotEncoder
+		
+		encoder = OneHotEncoder(inputCol="indexed", outputCol="features")
+		encoder.transform(td).head().features
+		注：对categorical类型的特征进行numerical转换，要用StringIndexer和oneHotEncoder完成；如果是label只需要用StringIndexer。
+	2.4 去重、缺失值和异常值处理
+		2.4.1 去重dropDuplicates
+		df = df.dropDuplicates()
+		
+		2.4.2 缺失值处理
+		查找每一行的缺失情况
+		df_miss.rdd.map(
+			lambda row: (row['id'], sum([c == None for c in row]))
+			).collect()
+		统计每一列的缺失情况
+		import pyspark.sql.functions as fn
+		df_miss.agg(*[
+			(1 - (fn.count(c) / fn.count('*'))).alias(c + '_missing')
+			for c in df_miss.columns]).show()
+		删除超过阈值thresh的行
+		df_miss_no_income.dropna(thresh=3).show()
+		
+	
+3.统计分析
+	3.1 基本的统计数
+		3.1.1 count
+		df.count()
+		df.distinct().count()
+		3.1.2 分组
+		fraud_df.groupby('gender').count().show()
+	3.2 统计描述
+		3.2.1 describe
+		fraud_df.describe()
+		只有count、mean、std、min和max
+		求偏度
+		fraud_df.agg({'balance': 'skewness'}).show()
+		求分位数
+		df_outliers.approxQuantile(col, [0.25, 0.75], 0.05)
+		
+		注：avg(), count(), countDistinct(), first(), kurtosis(),
+		max(), mean(), min(), skewness(), stddev(), stddev_pop(),
+		stddev_samp(), sum(), sumDistinct(), var_pop(), var_samp() and
+		variance()
+		3.2.2 相关性Correlations
+		n_numerical = len(numerical)
+		corr = []
+		for i in range(0, n_numerical):
+			temp = [None] * i
+			for j in range(i, n_numerical):
+				temp.append(fraud_df.corr(numerical[i], numerical[j]))
+				corr.append(temp)
+		
+		
+	
+4.降维和特征提取
+	4.1 降维
+	
+	4.2 特征提取
+		4.2.1 卡方检验
+		pyspark.ml.feature.ChiSqSelector(self, numTopFeatures=50, featuresCol="features", outputCol=None, labelCol="label", selectorType="numTopFeatures", percentile=0.1, fpr=0.05, fdr=0.05, fwe=0.05)
+		numTopFeatures chooses a fixed number of top features according to a chi-squared test.
+		percentile is similar but chooses a fraction of all features instead of a fixed number.
+		fpr chooses all features whose p-values are below a threshold, thus controlling the false positive rate of selection.
+		fdr uses the Benjamini-Hochberg procedure to choose all features whose false discovery rate is below a threshold.
+		fwe chooses all features whose p-values are below a threshold. The threshold is scaled by 1/numFeatures, thus controlling the family-wise error rate of selection.
+		
+		from pyspark.ml.feature import ChiSqSelector
+
+		selector = ChiSqSelector(numTopFeatures=2, featuresCol="features",
+								 outputCol="selectedFeatures", labelCol="label")
+		result = selector.fit(data_m).transform(data_m)
+	
+5.算法模型
+	5.1 分类模型
+		5.1.1 Nabayes
+		pyspark.ml.classification.NaiveBayes(self, featuresCol="features", labelCol="label", predictionCol="prediction", probabilityCol="probability", rawPredictionCol="rawPrediction", smoothing=1.0, modelType="multinomial", thresholds=None, weightCol=None)
+		注：Naive Bayes Classifiers. It supports both Multinomial and Bernoulli NB. Multinomial NB can handle finitely supported discrete data. For example, by converting documents into TF-IDF vectors, it can be used for document classification. By making every vector a binary (0/1) data, it can also be used as Bernoulli NB. The input feature values must be nonnegative.
+		
+		from pyspark.ml.classification import NaiveBayes
+		# create the trainer and set its parameters
+		nb = NaiveBayes(smoothing=1.0, modelType="multinomial")
+		# train the model
+		model = nb.fit(train)
+		
+		5.1.2 Logistic
+		pyspark.ml.classification.LogisticRegression(self, featuresCol="features", labelCol="label", predictionCol="prediction", 
+                              maxIter=100, regParam=0.0, elasticNetParam=0.0, tol=1e-6, fitIntercept=True, 
+                              threshold=0.5, thresholds=None, probabilityCol="probability", rawPredictionCol="rawPrediction", 
+                              standardization=True, weightCol=None, aggregationDepth=2, family="auto")
+		注：Logistic regression. This class supports multinomial logistic (softmax) and binomial logistic regression.
+		
+		from pyspark.ml.classification import LogisticRegression
+		# create the trainer and set its parameters
+		lr = LogisticRegression(featuresCol="selectedFeatures", maxIter=10, regParam=0.3, elasticNetParam=0.8)
+		# train the model
+		model = lr.fit(train)
+	
+	5.2 聚类
+	官方文档地址：http://spark.apache.org/docs/latest/ml-clustering.html
+		5.2.1 kmeans
+		pyspark.ml.clustering.KMeans(self, featuresCol="features", predictionCol="prediction", k=2, initMode="k-means||", initSteps=2, tol=1e-4, maxIter=20, seed=None)
+		注：K-means clustering with a k-means++ like initialization mode (the k-means|| algorithm by Bahmani et al).
+		
+		from pyspark.ml.clustering import KMeans
+		#建立kmeans模型
+		kmeans = KMeans(k=2, seed=1)
+		model = kmeans.fit(dataset)
+		# Evaluate clustering by computing Within Set Sum of Squared Errors.
+		wssse = model.computeCost(dataset)
+		print 'Within Set Sum of Squared Errors is'+str(wssse)
+		# Shows the result.
+		centers = model.clusterCenters()
+		print "Cluster Centers: " 
+		for center in centers:
+			print center
+	
+	5.3 图模型
+	注：此处使用的是spark的Graphframes包
+	pyspark --packages graphframes:graphframes:0.2.0-spark2.0-s_2.11
+	#load graphframes package to spark
+	import os
+	os.environ["PYSPARK_SUBMIT_ARGS"] = (
+		"--packages graphframes:graphframes:0.2.0-spark2.0-s_2.11 pyspark-shell")
+	from graphframes import *
+	
+		5.3.1 GraphFrame(v,e)
+		官方文档地址：https://graphframes.github.io/api/python/graphframes.html#graphframes.GraphFrame.pageRank
+		#创建GraphFrame
+		g = GraphFrame(v, e)
+		
+		5.3.2 pagerank
+		pageRank(resetProbability=0.15, sourceId=None, maxIter=None, tol=None)
+		# Run PageRank algorithm, and show results.
+		results = g.pageRank(resetProbability=0.05, maxIter=10)
+		results.vertices.select("id", "pagerank").show()
+
+6.
+		
+7. 网格参数寻优grid_search
+官方文档地址：http://spark.apache.org/docs/latest/ml-tuning.html
+	7.1 Train-validation splitting
+	pyspark.ml.tuning.TrainValidationSplit(self, estimator=None, estimatorParamMaps=None, evaluator=None, trainRatio=0.75, seed=None)
+	注：In addition to CrossValidator Spark also offers TrainValidationSplit for hyper-parameter tuning. TrainValidationSplit only evaluates each combination of parameters once, as opposed to k times in the case of CrossValidator. It is therefore less expensive, but will not produce as reliable results when the training dataset is not sufficiently large
+	
+	from pyspark.ml.tuning import TrainValidationSplit
+	tvs = TrainValidationSplit(estimator=lr, estimatorParamMaps=grid, evaluator=evaluator)
+	
+	7.2 CrossValidator交叉验证
+	pyspark.ml.tuning.CrossValidator(self, estimator=None, estimatorParamMaps=None, evaluator=None, numFolds=3, seed=None)
+	
+
+import pyspark.ml.tuning as tune
+
+lr = LogisticRegression()
+#添加需要调节的参数
+grid = tune.ParamGridBuilder().addGrid(lr.maxIter, [2, 10, 50]).addGrid(lr.regParam, [0.01, 0.05, 0.3]).build()
+
+# compute accuracy on the test set
+evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction",
+                                            metricName="accuracy")
+#交叉验证											
+cv = tune.CrossValidator(estimator=lr, estimatorParamMaps=grid, evaluator=evaluator)
+#使用管道
+pipeline = Pipeline(stages=[encoder ,featuresCreator])
+data_transformer = pipeline.fit(births_train)
+
+cvModel = cv.fit(data_transformer.transform(births_train))
+
+data_train = data_transformer.transform(births_test)
+results = cvModel.transform(data_train)
+print(evaluator.evaluate(results,
+{evaluator.metricName: 'areaUnderROC'}))
+print(evaluator.evaluate(results,
+{evaluator.metricName: 'areaUnderPR'}))
+
+results = [(
+[
+{key.name: paramValue}
+for key, paramValue in zip(params.keys(),params.values())
+], metric)
+for params, metric in zip(cvModel.getEstimatorParamMaps(),cvModel.avgMetrics)
+]
+sorted(results, key=lambda el: el[1], reverse=True)[0]
